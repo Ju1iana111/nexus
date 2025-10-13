@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { GameHeader } from './components/GameHeader';
 import { GameScreen } from './components/GameScreen';
 import { ActionInput } from './components/ActionInput';
@@ -8,9 +9,12 @@ import { RegistrationScreen } from './components/RegistrationScreen';
 import { getGameResponse, getInitialStats } from './services/geminiService';
 import * as db from './utils/db';
 import { saveGameToFile } from './utils/fileSaver';
-import type { Message, Quest, CharacterStats as CharacterStatsType, CombatState, PlayerInfo, GameState } from './types';
+import { calculateTotalStats } from './utils/statsManager';
+import { equipItem, unequipItem, useConsumable } from './utils/itemManager';
+import type { Message, Quest, CharacterStats, CombatState, PlayerInfo, GameState, Item, Equipment, EquipmentSlot } from './types';
 import { MessageRole, QuestStatus } from './types';
 import { locationsByFaction } from './data/locations';
+import { BagIcon } from './components/Icons';
 
 // Locally defined Notification Components
 const QuestNotification: React.FC<{ quest: Quest; type: 'new' | 'completed' }> = ({ quest, type }) => {
@@ -43,8 +47,19 @@ const EventNotification: React.FC<{ message: string }> = ({ message }) => {
   );
 };
 
+const LootNotification: React.FC<{ items: Item[] }> = ({ items }) => {
+  return (
+    <div className={`fixed bottom-56 right-10 bg-purple-900 border border-purple-600 text-white p-4 rounded-lg shadow-xl animate-fade-in-out z-50`}>
+      <p className="font-bold font-serif-header flex items-center gap-2"><BagIcon className="h-5 w-5"/> Найдена добыча!</p>
+      <ul className="mt-2 text-sm list-disc list-inside">
+        {items.map(item => <li key={item.id}>{item.name}</li>)}
+      </ul>
+    </div>
+  );
+};
 
-const initialStats: CharacterStatsType = {
+
+const initialStats: CharacterStats = {
   level: 1,
   xp: 0,
   xpToNextLevel: 100,
@@ -67,26 +82,37 @@ const initialCombatState: CombatState = {
     log: [],
 };
 
+const initialEquipment: Equipment = {
+    weapon: null,
+    armor: null,
+};
+
 const App: React.FC = () => {
   const [playerInfo, setPlayerInfo] = useState<PlayerInfo | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inventory, setInventory] = useState<string[]>([]);
+  const [inventory, setInventory] = useState<Item[]>([]);
   const [quests, setQuests] = useState<Quest[]>([]);
-  const [characterStats, setCharacterStats] = useState<CharacterStatsType>(initialStats);
+  const [baseCharacterStats, setBaseCharacterStats] = useState<CharacterStats>(initialStats);
   const [combatState, setCombatState] = useState<CombatState>(initialCombatState);
+  const [equipment, setEquipment] = useState<Equipment>(initialEquipment);
   const [currentLocation, setCurrentLocation] = useState<string | null>(null);
   const [locationDescription, setLocationDescription] = useState<string | null>(null);
   const [suggestedActions, setSuggestedActions] = useState<string[]>([]);
-  const [newItem, setNewItem] = useState<string | null>(null);
+  const [newItem, setNewItem] = useState<Item | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [questUpdate, setQuestUpdate] = useState<{ quest: Quest; type: 'new' | 'completed' } | null>(null);
   const [statUpdate, setStatUpdate] = useState<{ type: 'xp' | 'level'; value: number } | null>(null);
   const [eventNotification, setEventNotification] = useState<string | null>(null);
+  const [lootNotification, setLootNotification] = useState<Item[] | null>(null);
   const [isCoolingDown, setIsCoolingDown] = useState<boolean>(false);
   
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
   const [openFactions, setOpenFactions] = useState<Record<string, boolean>>({});
+
+  const characterStats = useMemo(() => {
+    return calculateTotalStats(baseCharacterStats, equipment);
+  }, [baseCharacterStats, equipment]);
 
   useEffect(() => {
     const loadGame = async () => {
@@ -121,6 +147,7 @@ const App: React.FC = () => {
     setMessages(initialHistory);
     setInventory([]);
     setQuests([]);
+    setEquipment(initialEquipment);
     setCombatState(initialCombatState);
     setCurrentLocation(null);
     setLocationDescription(null);
@@ -131,19 +158,21 @@ const App: React.FC = () => {
     
     try {
         const generatedStats = await getInitialStats(fullPlayerInfo);
-        const startingStats: CharacterStatsType = {
+        const startingStats: CharacterStats = {
             ...initialStats,
             ...generatedStats,
         };
+        setBaseCharacterStats(startingStats);
         
-        const response = await getGameResponse(initialHistory, [], [], startingStats, initialCombatState, fullPlayerInfo);
+        const response = await getGameResponse(initialHistory, [], [], startingStats, initialCombatState, initialEquipment, fullPlayerInfo);
 
         const firstMessage: Message = { role: MessageRole.GAME_MASTER, content: response.description };
         setMessages([firstMessage]);
         setInventory(response.inventory);
         setQuests(response.quests);
-        setCharacterStats(response.characterStats);
+        setBaseCharacterStats(response.characterStats);
         setCombatState(response.combatState);
+        setEquipment(response.equipment);
         setCurrentLocation(response.currentLocation ?? 'unknown');
         setLocationDescription(response.locationDescription ?? null);
         setSuggestedActions(response.suggested_actions);
@@ -155,6 +184,7 @@ const App: React.FC = () => {
             quests: response.quests,
             characterStats: response.characterStats,
             combatState: response.combatState,
+            equipment: response.equipment,
             currentLocation: response.currentLocation ?? 'unknown',
             locationDescription: response.locationDescription ?? null,
             playerInfo: fullPlayerInfo,
@@ -178,8 +208,9 @@ const App: React.FC = () => {
       setMessages(loadedState.messages);
       setInventory(loadedState.inventory);
       setQuests(loadedState.quests || []);
-      setCharacterStats({ ...initialStats, ...loadedState.characterStats });
+      setBaseCharacterStats({ ...initialStats, ...loadedState.characterStats });
       setCombatState(loadedState.combatState || initialCombatState);
+      setEquipment(loadedState.equipment || initialEquipment);
       setCurrentLocation(loadedState.currentLocation || null);
       setLocationDescription(loadedState.locationDescription || null);
       setPlayerInfo(loadedState.playerInfo);
@@ -192,7 +223,6 @@ const App: React.FC = () => {
   const handleLoadGameFromFile = (fileContent: string) => {
     try {
         const loadedState = JSON.parse(fileContent) as GameState;
-        // Basic validation to ensure it's a valid save file
         if (loadedState && loadedState.playerInfo && loadedState.messages && loadedState.characterStats) {
             handleLoadGame(loadedState);
         } else {
@@ -211,7 +241,8 @@ const App: React.FC = () => {
         setMessages([]);
         setInventory([]);
         setQuests([]);
-        setCharacterStats(initialStats);
+        setBaseCharacterStats(initialStats);
+        setEquipment(initialEquipment);
         setCombatState(initialCombatState);
         setCurrentLocation(null);
         setLocationDescription(null);
@@ -225,8 +256,9 @@ const App: React.FC = () => {
         messages,
         inventory,
         quests,
-        characterStats,
+        characterStats: baseCharacterStats,
         combatState,
+        equipment,
         currentLocation,
         locationDescription,
         playerInfo,
@@ -241,8 +273,9 @@ const App: React.FC = () => {
         messages,
         inventory,
         quests,
-        characterStats,
+        characterStats: baseCharacterStats,
         combatState,
+        equipment,
         currentLocation,
         locationDescription,
         playerInfo,
@@ -250,6 +283,24 @@ const App: React.FC = () => {
       saveGameToFile(gameState);
     }
   };
+
+  const handleEquipItem = (itemToEquip: Item) => {
+    const { newInventory, newEquipment } = equipItem(itemToEquip, inventory, equipment);
+    setInventory(newInventory);
+    setEquipment(newEquipment);
+  };
+
+  const handleUnequipItem = (slot: EquipmentSlot) => {
+    const { newInventory, newEquipment } = unequipItem(slot, inventory, equipment);
+    setInventory(newInventory);
+    setEquipment(newEquipment);
+  };
+
+  const handleUseItem = useCallback((itemToUse: Item) => {
+    const { newInventory, newBaseStats } = useConsumable(itemToUse, inventory, baseCharacterStats);
+    setInventory(newInventory);
+    setBaseCharacterStats(newBaseStats);
+  }, [inventory, baseCharacterStats]);
 
   useEffect(() => {
     if (newItem) {
@@ -266,7 +317,8 @@ const App: React.FC = () => {
     if (questUpdate) notificationTimer(setQuestUpdate);
     if (statUpdate) notificationTimer(setStatUpdate);
     if (eventNotification) notificationTimer(setEventNotification);
-  }, [questUpdate, statUpdate, eventNotification]);
+    if (lootNotification) notificationTimer(setLootNotification);
+  }, [questUpdate, statUpdate, eventNotification, lootNotification]);
 
 
   const handlePlayerAction = async (action: string) => {
@@ -282,15 +334,60 @@ const App: React.FC = () => {
     setMessages(history);
 
     try {
-      const response = await getGameResponse(history, inventory, quests, characterStats, combatState, playerInfo);
+      // Create a map of all items the player currently possesses by their ID.
+      // This map will be the source of truth for existing item data to prevent the AI from modifying it.
+      const knownItems = new Map<string, Item>();
+      inventory.forEach(item => knownItems.set(item.id, item));
+      Object.values(equipment).forEach(item => {
+        if (item) {
+          knownItems.set(item.id, item);
+        }
+      });
+
+      const response = await getGameResponse(history, inventory, quests, characterStats, combatState, equipment, playerInfo);
       
       const newGameMasterMessage: Message = { role: MessageRole.GAME_MASTER, content: response.description };
       setMessages(prev => [...prev, newGameMasterMessage]);
-      setInventory(response.inventory);
+
+      // Reconcile inventory and equipment from the AI's response.
+      // For each item returned, check if we already have it. If so, use our original version
+      // to prevent the AI from randomly changing its stats. If it's a new item, accept it.
+      // FIX: The AI can return malformed item objects (e.g., empty objects or objects without an id),
+      // which causes a TypeScript error when trying to access properties on `unknown`.
+      // This validates each item, ensuring it has an `id`, and filters out invalid ones.
+      const reconciledInventory = (response.inventory || [])
+        .map(itemFromAI => {
+          const item = itemFromAI as Item;
+          if (item && item.id) {
+            return knownItems.get(item.id) || item;
+          }
+          return null; // Discard invalid items
+        })
+        .filter(Boolean) as Item[];
+
+      const reconciledEquipment: Equipment = { weapon: null, armor: null };
+      if (response.equipment) {
+          const weaponFromAI = response.equipment.weapon;
+          if (weaponFromAI && weaponFromAI.id) {
+              reconciledEquipment.weapon = knownItems.get(weaponFromAI.id) || weaponFromAI;
+          }
+          const armorFromAI = response.equipment.armor;
+          if (armorFromAI && armorFromAI.id) {
+              reconciledEquipment.armor = knownItems.get(armorFromAI.id) || armorFromAI;
+          }
+      }
+      
+      setInventory(reconciledInventory);
+      setEquipment(reconciledEquipment);
+      
       setSuggestedActions(response.suggested_actions);
       setCombatState(response.combatState);
       setCurrentLocation(response.currentLocation ?? 'unknown');
       setLocationDescription(response.locationDescription ?? null);
+
+      if (response.loot && response.loot.length > 0) {
+        setLootNotification(response.loot);
+      }
 
       const oldQuestIds = new Set(quests.map(q => q.id));
       const oldCompletedQuestIds = new Set(quests.filter(q => q.status === QuestStatus.COMPLETED).map(q => q.id));
@@ -306,16 +403,16 @@ const App: React.FC = () => {
       if (response.xpGained && response.xpGained > 0) {
           setStatUpdate({ type: 'xp', value: response.xpGained });
       }
-      if (response.characterStats.level > characterStats.level) {
+      if (response.characterStats.level > baseCharacterStats.level) {
           setStatUpdate({ type: 'level', value: response.characterStats.level });
       }
-      setCharacterStats(response.characterStats);
+      setBaseCharacterStats(response.characterStats);
 
       if (response.randomEvent) {
           setEventNotification(response.randomEvent.name);
       }
 
-      if (response.newItem && !inventory.includes(response.newItem)) {
+      if (response.newItem) {
         setNewItem(response.newItem);
       }
 
@@ -337,22 +434,22 @@ const App: React.FC = () => {
     }
   };
   
-  // Auto-save whenever a meaningful part of the game state changes.
   useEffect(() => {
     if (!isInitialLoading && playerInfo) {
-      const gameState = {
+      const gameState: GameState = {
         messages,
         inventory,
         quests,
-        characterStats,
+        characterStats: baseCharacterStats,
         combatState,
+        equipment,
         currentLocation,
         locationDescription,
         playerInfo,
       };
       db.saveGameState(gameState);
     }
-  }, [messages, inventory, quests, characterStats, combatState, currentLocation, isInitialLoading, playerInfo, locationDescription]);
+  }, [messages, inventory, quests, baseCharacterStats, combatState, equipment, currentLocation, isInitialLoading, playerInfo, locationDescription]);
 
 
   const toggleFaction = (factionName: string) => {
@@ -380,7 +477,6 @@ const App: React.FC = () => {
       <GameHeader onNewGame={handleNewGame} onSaveGame={handleSaveGame} onSaveAs={handleSaveAs} />
       <main className="flex-grow container mx-auto p-4 flex flex-col lg:flex-row gap-6 overflow-hidden custom-scrollbar">
         
-        {/* Main Content: first in DOM for mobile, second for desktop */}
         <div className="lg:w-2/3 lg:order-2 flex flex-col h-3/5 lg:h-full">
           <GameScreen messages={messages} combatState={combatState} />
           <div className="pt-4 mt-auto">
@@ -392,16 +488,19 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Sidebar: second in DOM for mobile, first for desktop */}
         <div className="lg:w-1/3 lg:order-1 flex flex-col h-2/5 lg:h-full overflow-y-auto custom-scrollbar">
           <Inventory 
             stats={characterStats}
             inventory={inventory} 
             newItem={newItem} 
             quests={quests} 
+            equipment={equipment}
             currentLocation={currentLocation}
             locationDescription={locationDescription}
             onNavigate={handlePlayerAction}
+            onEquipItem={handleEquipItem}
+            onUnequipItem={handleUnequipItem}
+            onUseItem={handleUseItem}
             openFactions={openFactions}
             onToggleFaction={toggleFaction}
           />
@@ -411,6 +510,7 @@ const App: React.FC = () => {
       {questUpdate && <QuestNotification quest={questUpdate.quest} type={questUpdate.type} />}
       {statUpdate && <StatNotification type={statUpdate.type} value={statUpdate.value} />}
       {eventNotification && <EventNotification message={eventNotification} />}
+      {lootNotification && <LootNotification items={lootNotification} />}
       <style>{`
         :root {
           --font-serif-header: 'Cinzel Decorative', serif;

@@ -53,15 +53,41 @@ export interface CombatState {
     log: string[];
 }
 
+export enum ItemType {
+  WEAPON = 'weapon',
+  ARMOR = 'armor',
+  CONSUMABLE = 'consumable',
+  MISC = 'misc',
+}
+
+export interface Item {
+  id: string;
+  name: string;
+  type: ItemType;
+  description: string;
+  stats?: Partial<Omit<CharacterStats, 'reputation' | 'hp' | 'maxHp' | 'xp' | 'xpToNextLevel' | 'level'>>;
+  effect?: {
+    type: 'heal';
+    amount: number;
+  };
+}
+
+export type EquipmentSlot = 'weapon' | 'armor';
+
+export type Equipment = Record<EquipmentSlot, Item | null>;
+
+
 export interface GameResponse {
   description: string;
   suggested_actions: string[];
-  inventory: string[];
-  newItem?: string;
+  inventory: Item[];
+  newItem?: Item;
+  loot?: Item[];
   quests: Quest[];
   characterStats: CharacterStats;
   xpGained?: number;
   combatState: CombatState;
+  equipment: Equipment;
   currentLocation?: string;
   locationDescription?: string;
   randomEvent?: {
@@ -72,10 +98,11 @@ export interface GameResponse {
 
 export interface GameState {
   messages: Message[];
-  inventory: string[];
+  inventory: Item[];
   quests: Quest[];
   characterStats: CharacterStats;
   combatState: CombatState;
+  equipment: Equipment;
   currentLocation: string | null;
   locationDescription: string | null;
   playerInfo: PlayerInfo | null;

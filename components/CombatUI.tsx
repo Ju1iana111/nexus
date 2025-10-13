@@ -6,7 +6,8 @@ interface EnemyDisplayProps {
     enemy: Enemy;
 }
 
-function EnemyDisplay({ enemy }: EnemyDisplayProps) {
+// FIX: Changed to a const with React.FC to fix typing issue with the 'key' prop.
+const EnemyDisplay: React.FC<EnemyDisplayProps> = ({ enemy }) => {
     const hpPercentage = enemy.maxHp > 0 ? (enemy.hp / enemy.maxHp) * 100 : 0;
     return (
         <div className="bg-stone-800/70 p-3 rounded-lg">

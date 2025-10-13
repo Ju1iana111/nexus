@@ -1,20 +1,25 @@
 import React, { useState } from 'react';
-import type { Quest, CharacterStats as CharacterStatsType } from '../types';
-import { QuestStatus } from '../types';
+import type { Quest, CharacterStats as CharacterStatsType, Item, Equipment, EquipmentSlot } from '../types';
+import { QuestStatus, ItemType } from '../types';
 import { 
     BagIcon, QuestIcon, MapIcon, ArchitectIcon, CompassIcon, UserIcon,
-    StrengthIcon, DexterityIcon, IntelligenceIcon, LightPantheonIcon, DarkPantheonIcon, NeutralPantheonIcon
+    StrengthIcon, DexterityIcon, IntelligenceIcon, LightPantheonIcon, DarkPantheonIcon, NeutralPantheonIcon,
+    WeaponIcon, ArmorIcon
 } from './Icons';
 import { WorldMap } from './WorldMap';
 
 interface SidebarProps {
   stats: CharacterStatsType;
-  inventory: string[];
-  newItem: string | null;
+  inventory: Item[];
+  newItem: Item | null;
   quests: Quest[];
+  equipment: Equipment;
   currentLocation: string | null;
   locationDescription: string | null;
   onNavigate: (action: string) => void;
+  onEquipItem: (item: Item) => void;
+  onUnequipItem: (slot: EquipmentSlot) => void;
+  onUseItem: (item: Item) => void;
   openFactions: Record<string, boolean>;
   onToggleFaction: (factionName: string) => void;
 }
@@ -38,21 +43,33 @@ const QuestItem: React.FC<{ quest: Quest }> = ({ quest }) => {
     );
 };
 
-// --- Helper components from CharacterStats ---
-interface StatDisplayProps {
-    icon: React.ReactNode;
-    label: string;
-    value: number;
-    color: string;
-}
-
-const factionInfo: Record<string, { name: string; icon: JSX.Element; color: string }> = {
+// --- Helper components for stats and equipment ---
+// FIX: Changed JSX.Element to React.ReactNode to resolve TypeScript namespace error.
+const factionInfo: Record<string, { name: string; icon: React.ReactNode; color: string }> = {
     pantheon_light: { name: 'Свет', icon: <LightPantheonIcon className="h-5 w-5 text-yellow-300" />, color: 'text-yellow-400' },
     pantheon_dark: { name: 'Тьма', icon: <DarkPantheonIcon className="h-5 w-5 text-indigo-300" />, color: 'text-indigo-400' },
     pantheon_neutral: { name: 'Нейтралитет', icon: <NeutralPantheonIcon className="h-5 w-5 text-stone-300" />, color: 'text-stone-400' },
 };
 
-function StatDisplay({ icon, label, value, color }: StatDisplayProps) {
+const formatStatBonus = (stat: string, value: number) => {
+    const sign = value > 0 ? '+' : '';
+    const label = {
+        strength: 'СИЛ',
+        dexterity: 'ЛОВ',
+        intelligence: 'ИНТ',
+    }[stat] || stat.substring(0,3).toUpperCase();
+    return `${sign}${value} ${label}`;
+};
+
+const formatEffect = (effect: Item['effect']) => {
+    if (!effect) return '';
+    if (effect.type === 'heal') {
+        return `Восстанавливает ${effect.amount} HP`;
+    }
+    return 'Неизвестный эффект';
+};
+
+function StatDisplay({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string; }) {
     return (
         <div className="flex items-center gap-3 bg-stone-800/50 p-2 rounded-lg">
             <div className={`p-1 rounded-md ${color}`}>
@@ -65,6 +82,45 @@ function StatDisplay({ icon, label, value, color }: StatDisplayProps) {
         </div>
     );
 }
+
+const EquipmentSlotDisplay: React.FC<{
+    slot: EquipmentSlot;
+    item: Item | null;
+    onUnequip: (slot: EquipmentSlot) => void;
+}> = ({ slot, item, onUnequip }) => {
+    const icon = slot === 'weapon' ? <WeaponIcon className="h-6 w-6 text-red-400" /> : <ArmorIcon className="h-6 w-6 text-sky-400" />;
+    const label = slot === 'weapon' ? 'Оружие' : 'Броня';
+
+    return (
+        <div className="flex items-center gap-3 bg-stone-800/50 p-2 rounded-lg min-h-[60px]">
+            <div className="p-1">{icon}</div>
+            <div className="flex-grow">
+                <span className="text-xs text-stone-400">{label}</span>
+                {item ? (
+                    <>
+                        <p className="font-bold text-stone-100">{item.name}</p>
+                        {item.stats && (
+                             <p className="text-xs text-green-400 font-mono">
+                                {/* FIX: Cast value to number as Object.entries types it as unknown. */}
+                                {Object.entries(item.stats).map(([key, value]) => formatStatBonus(key, value as number)).join(', ')}
+                            </p>
+                        )}
+                    </>
+                ) : (
+                    <p className="text-stone-500 italic">Пусто</p>
+                )}
+            </div>
+            {item && (
+                <button 
+                    onClick={() => onUnequip(slot)}
+                    className="text-stone-400 hover:text-white text-xs bg-stone-700 hover:bg-red-800/50 px-2 py-1 rounded transition-colors"
+                >
+                    Снять
+                </button>
+            )}
+        </div>
+    );
+};
 // --- End Helper components ---
 
 
@@ -73,9 +129,13 @@ export function Inventory({
     inventory, 
     newItem, 
     quests, 
+    equipment,
     currentLocation, 
     locationDescription,
     onNavigate,
+    onEquipItem,
+    onUnequipItem,
+    onUseItem,
     openFactions,
     onToggleFaction,
 }: SidebarProps) {
@@ -121,37 +181,39 @@ export function Inventory({
       
         <div className="flex-grow overflow-y-auto custom-scrollbar">
             {activeTab === 'character' && (
-                <div className="p-4">
-                     <div className="flex justify-between items-baseline mb-3">
-                        <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-yellow-300 font-serif-header">Персонаж</h2>
-                        <span className="text-lg font-bold text-yellow-400">Уровень {level}</span>
-                    </div>
-                    
-                    {/* HP Bar */}
-                    <div className="mb-4">
-                        <div className="flex justify-between text-xs text-red-300 mb-1">
-                        <span>Здоровье</span>
-                        <span>{hp} / {maxHp}</span>
+                <div className="p-4 space-y-4">
+                     <div>
+                        <div className="flex justify-between items-baseline mb-3">
+                            <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-amber-400 to-yellow-300 font-serif-header">Персонаж</h2>
+                            <span className="text-lg font-bold text-yellow-400">Уровень {level}</span>
                         </div>
-                        <div className="w-full bg-stone-700 rounded-full h-2.5">
-                        <div 
-                            className="bg-red-700 h-2.5 rounded-full transition-all duration-500" 
-                            style={{ width: `${hpPercentage}%` }}
-                        ></div>
+                        
+                        {/* HP Bar */}
+                        <div className="mb-2">
+                            <div className="flex justify-between text-xs text-red-300 mb-1">
+                                <span>Здоровье</span>
+                                <span>{hp} / {maxHp}</span>
+                            </div>
+                            <div className="w-full bg-stone-700 rounded-full h-2.5">
+                            <div 
+                                className="bg-red-700 h-2.5 rounded-full transition-all duration-500" 
+                                style={{ width: `${hpPercentage}%` }}
+                            ></div>
+                            </div>
                         </div>
-                    </div>
 
-                    {/* XP Bar */}
-                    <div className="mb-4">
-                        <div className="flex justify-between text-xs text-stone-400 mb-1">
-                        <span>Опыт</span>
-                        <span>{xp} / {xpToNextLevel}</span>
-                        </div>
-                        <div className="w-full bg-stone-700 rounded-full h-2.5">
-                        <div 
-                            className="bg-amber-600 h-2.5 rounded-full transition-all duration-500" 
-                            style={{ width: `${xpPercentage}%` }}
-                        ></div>
+                        {/* XP Bar */}
+                        <div>
+                            <div className="flex justify-between text-xs text-stone-400 mb-1">
+                                <span>Опыт</span>
+                                <span>{xp} / {xpToNextLevel}</span>
+                            </div>
+                            <div className="w-full bg-stone-700 rounded-full h-2.5">
+                            <div 
+                                className="bg-amber-600 h-2.5 rounded-full transition-all duration-500" 
+                                style={{ width: `${xpPercentage}%` }}
+                            ></div>
+                            </div>
                         </div>
                     </div>
 
@@ -162,9 +224,19 @@ export function Inventory({
                         <StatDisplay icon={<IntelligenceIcon className="h-5 w-5 text-blue-200" />} label="Интеллект" value={intelligence} color="bg-blue-700/30" />
                     </div>
 
+                    {/* Equipment Section */}
+                    <div className="pt-4 border-t border-amber-800/60">
+                        <h3 className="text-sm font-semibold text-stone-400 mb-2 text-center font-serif-header">Экипировка</h3>
+                        <div className="space-y-2">
+                            <EquipmentSlotDisplay slot="weapon" item={equipment.weapon} onUnequip={onUnequipItem} />
+                            <EquipmentSlotDisplay slot="armor" item={equipment.armor} onUnequip={onUnequipItem} />
+                        </div>
+                    </div>
+
+
                     {/* Reputation Section */}
                     {reputation && (
-                        <div className="mt-4 pt-4 border-t border-amber-800/60">
+                        <div className="pt-4 border-t border-amber-800/60">
                             <h3 className="text-sm font-semibold text-stone-400 mb-2 text-center font-serif-header">Репутация</h3>
                             <div className="space-y-2">
                                 {Object.entries(reputation).map(([key, value]) => {
@@ -212,14 +284,48 @@ export function Inventory({
                         </h3>
                         {inventory.length > 0 ? (
                         <ul className="space-y-2">
-                            {inventory.map((item, index) => (
-                            <li
-                                key={`${item}-${index}`}
-                                className={`text-stone-300 bg-stone-800/80 px-3 py-2 rounded-md text-sm ${item === newItem ? 'new-item-glow' : ''}`}
-                            >
-                                {item}
-                            </li>
-                            ))}
+                            {inventory.map((item) => {
+                                const isHealAtFullHp = item.effect?.type === 'heal' && stats.hp >= stats.maxHp;
+
+                                return (
+                                <li key={item.id} className={`p-3 rounded-lg border bg-stone-800/80 border-stone-700 ${item.id === newItem?.id ? 'new-item-glow' : ''}`}>
+                                    <div className="flex justify-between items-start gap-2">
+                                        <div>
+                                            <h4 className="font-semibold text-amber-200">{item.name}</h4>
+                                            <p className="text-sm text-stone-400 mt-1">{item.description}</p>
+                                            {item.stats && (
+                                                <p className="text-xs text-green-400 font-mono mt-1">
+                                                    {/* FIX: Cast value to number as Object.entries types it as unknown. */}
+                                                    {Object.entries(item.stats).map(([key, value]) => formatStatBonus(key, value as number)).join(', ')}
+                                                </p>
+                                            )}
+                                            {item.effect && (
+                                                <p className="text-xs text-sky-300 font-mono mt-1">
+                                                    {formatEffect(item.effect)}
+                                                </p>
+                                            )}
+                                        </div>
+                                        {(item.type === ItemType.WEAPON || item.type === ItemType.ARMOR) && (
+                                            <button 
+                                                onClick={() => onEquipItem(item)}
+                                                className="text-stone-200 hover:text-white text-xs bg-green-800/60 hover:bg-green-700/60 px-3 py-1 rounded transition-colors whitespace-nowrap"
+                                            >
+                                                Надеть
+                                            </button>
+                                        )}
+                                        {item.type === ItemType.CONSUMABLE && (
+                                            <button
+                                                onClick={() => onUseItem(item)}
+                                                disabled={isHealAtFullHp}
+                                                className="text-stone-200 hover:text-white text-xs bg-sky-800/60 hover:bg-sky-700/60 px-3 py-1 rounded transition-colors whitespace-nowrap disabled:bg-stone-700/50 disabled:text-stone-400 disabled:cursor-not-allowed"
+                                                title={isHealAtFullHp ? "Здоровье уже полное" : `Использовать ${item.name}`}
+                                            >
+                                                Использовать
+                                            </button>
+                                        )}
+                                    </div>
+                                </li>
+                            )})}
                         </ul>
                         ) : (
                         <p className="text-stone-500 italic text-sm">Ваш инвентарь пуст.</p>
@@ -270,11 +376,12 @@ export function Inventory({
        <style>{`
         .new-item-glow {
             animation: glow 2s ease-in-out;
-            box-shadow: 0 0 5px #fde047, 0 0 10px #fde047, 0 0 15px #fcd34d;
+            border-color: #fde047;
+            box-shadow: 0 0 5px #fde047, 0 0 10px #fde047;
         }
         @keyframes glow {
-          0%, 100% { box-shadow: 0 0 5px #fde047, 0 0 10px #fde047, 0 0 15px #fcd34d; }
-          50% { box-shadow: 0 0 10px #fde047, 0 0 20px #fcd34d, 0 0 30px #fbbf24; }
+          0%, 100% { border-color: #fde047; box-shadow: 0 0 5px #fde047, 0 0 10px #fde047; }
+          50% { border-color: #fbbf24; box-shadow: 0 0 10px #fde047, 0 0 20px #fcd34d; }
         }
         .custom-scrollbar::-webkit-scrollbar {
             width: 6px;
